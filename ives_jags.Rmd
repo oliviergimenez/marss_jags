@@ -1,0 +1,485 @@
+---
+title: "Bayesian Multivariate Autoregressive State-Space models - MARSS in Jags"
+author: "Olivier Gimenez"
+date: "07/09/2020"
+output:
+  html_document:
+    keep_md: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      dpi = 300)
+```
+
+## Context
+
+Species interactions are fascinating. To study them we often have to analyse time series of counts. Counts are challenging because of observation errors, lack of independence and spatial heterogeneity. State-space models are often used to deal with these issues. However, state-space models are complex statistical tools and are not easy to manipulate.  
+
+[Eli Holmes](https://eeholmes.github.io/), [Mark Scheuerell](https://faculty.washington.edu/scheuerl/) and [Eric Ward](https://ericward-noaa.github.io/) share electronic books and courses on [the analysis of time series](https://nwfsc-timeseries.github.io/), including material on state-space models. They introduce MARSS models which stands for Multivariate Autoregressive State-Space models as a flexible framework to analyse time series of counts, and provide a package called `MARSS` to implement these models. 
+
+Check it out, these resources are awesome!
+
+Holmes, Scheuerell and Ward also have a great [book on the analysis of time series](https://nwfsc-timeseries.github.io/atsa-labs/), in which they illustrate the frequentist approach with their package `MARSS` and the Bayesian approach with `Jags` and `Stan`. Regarding species interactions more specifically, Eli Holmes has a [dedicated course](https://nwfsc-timeseries.github.io/atsa/Lectures/Week%209/lec_17_estimating_interactions.pdf) in which she asks how interactions change over time, and how environmental change affect interactions, and she uses state-space models to answer these questions. 
+
+Below I will use `Jags` to reproduce an example from the package `MARSS` user's guide. 
+
+## Models
+
+Multivariate state-space models can be written as:
+\begin{equation}
+\begin{gathered}
+\mathbf{x}_t = \mathbf{B} \mathbf{x}_{t-1}+\mathbf{w}_t \text{ where } \mathbf{w}_t \sim \,\text{N}(0,\mathbf{Q}) \\
+\mathbf{y}_t = \mathbf{Z}\mathbf{x}_t+\mathbf{a}+\mathbf{v}_t \text{ where } \mathbf{v}_t \sim \,\text{N}(0,\mathbf{R}) \\
+\mathbf{x}_0 = \boldsymbol{\mu}
+\end{gathered}   
+\end{equation}
+Briefly speaking, $\mathbf{y}_t$ is a vector of observed log counts for each species, $\mathbf{x}_t$ is for the true log abundances, $\mathbf{B}$ is a matrix that captures species interactions, $\mathbf{w}_t$ the process error, $\mathbf{v}_t$ the observation error, $\mathbf{a}$ is a vector of intrinsic growth rate for each species. There are many variations of this model. For example, we may wish to incorporate environmental covariates. More details can be found in the `MARSS` user's guide that you can easily access by typing in the following command.
+```{r}
+RShowDoc("UserGuide", package="MARSS")
+```
+
+Chapter 14 on the *Estimation of species interaction strengths with and without covariates* will be of much interest to us. You can easily get the code and data that come with this chapter by typing in the following command.
+```{r}
+RShowDoc("Chapter_SpeciesInteractions.R", package="MARSS")
+```
+
+Now let's get to it. We will use a dataset from a landmark paper on MARSS by Ives et al. (2003) entitled *Estimating community stability and ecological interactions from time-series data* and published in the journal Ecological Monographs.
+
+## Read in and visualize data
+
+Prerequisites.
+```{r}
+library(tidyverse)
+theme_set(theme_light()) 
+library(janitor)
+library(lubridate)
+library(MARSS)
+```
+
+Load in the plankton data. Only use the plankton, daphnia, and non-daphnia.
+```{r}
+data(ivesDataByWeek)
+dat <- ivesDataByWeek %>%
+  as_tibble() %>% 
+  clean_names() %>% # clean column names
+  select(large_phyto, small_phyto, daphnia, non_daphnia) %>% # select species
+  mutate(across(where(is.double), log)) %>% # log transform all columns
+  mutate(across(where(is.double), scale, scale = FALSE)) %>% # center all columns
+  clean_names() # clean column names
+dat
+```
+
+Plot all data.
+```{r}
+dat %>%
+  mutate(week = row_number()) %>% # add week id
+  pivot_longer(large_phyto:non_daphnia, 
+               values_to = "log_biomass", 
+               names_to = "species") %>%
+  ggplot() + 
+  aes(x = week, y = log_biomass, color = species) + 
+  geom_line() +
+  labs(x = "Week", 
+       y = "Biomass (log)",
+       color = "Species") + 
+  geom_hline(yintercept = 0, lty = "dashed") + 
+  expand_limits(x = 0)
+```
+
+Plot by species.
+```{r}
+dat %>%
+  mutate(week = row_number()) %>% # add week id
+  pivot_longer(large_phyto:non_daphnia, 
+               values_to = "log_biomass", 
+               names_to = "species") %>%
+  ggplot() + 
+  aes(x = week, y = log_biomass) + 
+  geom_line() +
+  labs(x = "Week", 
+       y = "Biomass (log)") + 
+  geom_hline(yintercept = 0, lty = "dashed", color = "gray70") + 
+  expand_limits(x = 0) + 
+  facet_wrap(~species)
+```
+
+## MARSS model in the frequentist framework
+
+We consider a model with the following assumptions:
+* All phytoplankton share the same process variance.
+* All zooplankton share the same process variance.
+* Phytoplankton and zooplankton have different measurement variances.
+* Measurement errors are independent.
+* Process errors are independent.
+
+We fit this model with the `MARSS` package. We need to specify the ingredients first. 
+```{r}
+Q <- matrix(list(0), 4, 4)
+diag(Q) <- c("Phyto", "Phyto", "Zoo", "Zoo")
+R <- matrix(list(0), 4, 4)
+diag(R) <- c("Phyto", "Phyto", "Zoo", "Zoo")
+plank.model.0 <- list(
+  B = "unconstrained", U = "zero", Q = Q,
+  Z = "identity", A = "zero", R = R,
+  x0 = "unequal", tinitx = 1
+)
+plank.model.0
+```
+Then we fit the model.
+```{r}
+kem.plank.0 <- dat %>%
+  t() %>%
+  MARSS(model = plank.model.0)
+```
+
+We may get the estimates in a more readable format. For example, let's have a look to the interactions. We denote LP for large phytoplankton, SP for small phytoplankton, D for Daphnia and ND for non-Daphnia. These estimates describe the effect of the density of species $j$ on the per capita growth rate of species $i$.
+```{r}
+B.0 <- coef(kem.plank.0, type = "matrix")$B[1:4, 1:4]
+rownames(B.0) <- colnames(B.0) <- c("LP", "SP", "D", "ND")
+print(B.0, digits = 2)
+```
+
+The effect of species $j$ on species $i$ is given by the cell at $i$-th row and $j$-th column. The B matrix suggests that SP has a possitive effect on D (2.29). 
+In the diagonal, we have the strenght of density-dependence: if species $i$ is density-independent, then $B_{i,i}$ equals 1; smaller $B_{i,i}$ means more density dependence.
+
+## MARSS model in the Bayesian framework
+
+Let's try to reproduce these results in a Bayesian framework with `Jags`. 
+```{r}
+library(R2jags)
+```
+
+Let's explore the scaled gama prior for precision which gives us the scaled half-t prior for the standard deviation in `Jags`. Check out [this presentation](http://genome.jouy.inra.fr/applibugs/applibugs.18_06_21.mplummer.pdf) by Martyn Plummer for more details.
+```{r}
+LaplacesDemon::rhalft(1000, scale = 1, nu = 10) %>%
+  as_tibble() %>%
+  ggplot(aes(value)) +
+  geom_histogram(fill = "white", color = "black")
+```
+
+Write the model.
+```{r}
+jagsscript <- cat("
+model {  
+
+   # Estimate the initial state vector of population abundances
+   for(i in 1:nSpecies) {
+      X[i,1] ~ dnorm(0,1) # weakly informative normal prior 
+      xknot[i] <- X[i,1]
+   }
+
+   # B matrix of interactions
+   B[1, 1] <- alpha[1]
+   B[1, 2] <- alpha[2]
+   B[1, 3] <- alpha[3]
+   B[1, 4] <- alpha[4]
+   B[2, 1] <- alpha[5]
+   B[2, 2] <- alpha[6]
+   B[2, 3] <- alpha[7]
+   B[2, 4] <- alpha[8]
+   B[3, 1] <- alpha[9]
+   B[3, 2] <- alpha[10]
+   B[3, 3] <- alpha[11]
+   B[3, 4] <- alpha[12]
+   B[4, 1] <- alpha[13]
+   B[4, 2] <- alpha[14]
+   B[4, 3] <- alpha[15]
+   B[4, 4] <- alpha[16]
+   for (k in 1:16){
+   alpha[k] ~ dunif(-1, 1)
+   }
+
+   # Autoregressive process
+   for(t in 2:nYears) {
+      for(i in 1:nSpecies) {
+         predX[i,t] <- inprod(B[i,], X[,t-1])
+         X[i,t] ~ dnorm(predX[i,t], tauQ[species[i]])
+      }
+   }
+	 tauQ[1] ~ dscaled.gamma(1, 10)
+	 tauQ[2] ~ dscaled.gamma(1, 10)
+   Qp <- 1 / tauQ[1]
+   Qd <- 1 / tauQ[2]
+
+   # Observation model
+   for(t in 1:nYears) {
+     for(i in 1:nSpecies) {
+       counts[i,t] ~ dnorm(X[i,t], tauR[species[i]])
+     }
+   }
+	 tauR[1] ~ dscaled.gamma(1, 10)
+	 tauR[2] ~ dscaled.gamma(1, 10)
+   Rp <- 1 / tauR[1]
+   Rd <- 1 / tauR[2]
+
+}  
+
+",file="marss-jags.txt")
+```
+
+Put the data in a list, specify the parameters to monitor.
+```{r}
+tdat <- t(dat)
+jags.data <- list(counts = tdat, 
+                  nSpecies = nrow(tdat), 
+                  nYears = ncol(tdat),
+                  species = c(1, 1, 2, 2))
+jags.params <- c("Qp", "Qd", "xknot","alpha", "Rp", "Rd", "X") 
+model.loc <- "marss-jags.txt" # name of the txt file
+```
+
+Now run `Jags`!
+```{r cache = TRUE}
+mod_1 <- jags(jags.data, 
+              parameters.to.save = jags.params, 
+              model.file = model.loc, 
+              n.chains = 2, 
+              n.burnin = 2500, 
+              n.thin = 1, 
+              n.iter = 5000)  
+```
+
+Inspect estimates. Probably needs to run it longer to improve n.eff. For illustration purpose, that'll do. 
+```{r}
+mod_1
+```
+
+Check convergence.
+```{r}
+traceplot(mod_1, 
+          ask = FALSE,
+          varname = c("Qp", "Qd", "xknot","alpha", "Rp", "Rd"))
+```
+
+Get Q and R estimates and compare to MLEs. 
+```{r}
+mod_1$BUGSoutput$mean$Qd
+mod_1$BUGSoutput$mean$Qp
+mod_1$BUGSoutput$mean$Rd
+mod_1$BUGSoutput$mean$Rp
+```
+
+```{r}
+kem.plank.0$coef['Q.Zoo']
+kem.plank.0$coef['Q.Phyto']
+kem.plank.0$coef['R.Zoo']
+kem.plank.0$coef['R.Phyto']
+```
+
+
+Get init X estimates and compare to MLEs. 
+```{r}
+mod_1$BUGSoutput$mean$xknot
+```
+
+```{r}
+kem.plank.0$coef['x0.X.large_phyto']
+kem.plank.0$coef['x0.X.small_phyto']
+kem.plank.0$coef['x0.X.daphnia']
+kem.plank.0$coef['x0.X.non_daphnia']
+```
+
+Get B estimates and compare to MLEs.
+```{r}
+round(matrix(mod_1$BUGSoutput$mean$alpha, byrow = TRUE, ncol = 4) ,2)
+```
+
+```{r}
+print(B.0, digits = 2)
+```
+
+```{r}
+pivot_dat <- dat %>%
+  mutate(week = row_number()) %>%
+  pivot_longer(large_phyto:non_daphnia, 
+               values_to = "log_biomass", 
+               names_to = "species")
+
+mod_1$BUGSoutput$sims.matrix %>%
+  as_tibble() %>%
+  pivot_longer(cols = everything(),  values_to = "value", names_to = "parameter") %>%
+  filter(str_detect(parameter, "X")) %>%
+  mutate(species = rep(rep(unique(pivot_dat$species), 269),5000),
+         week = as.numeric(rep(gl(269, 4),5000))) %>%
+  group_by(parameter, species, week) %>%
+  summarize(medianN = median(value),
+            lci = quantile(value, probs = 2.5/100),
+            uci = quantile(value, probs = 97.5/100)) %>%
+  arrange(week) %>%
+  ggplot() + 
+  geom_ribbon(aes(x = week, y = medianN, ymin = lci, ymax = uci), fill = "red", alpha = 0.3) + 
+  geom_line(aes(x = week, y = medianN), lty = "dashed", color = "red") +
+  geom_point(data = pivot_dat, aes(x = week, y = log_biomass)) + 
+  labs(x = "Week", 
+       y = "Biomass (log)") + 
+  geom_hline(yintercept = 0, lty = "dashed", color = "gray70") + 
+  expand_limits(x = 0) + 
+  facet_wrap(~species, scales = "free_y")
+```
+
+
+
+## Yet to be done
+
+### Getting closer to Ives' et al (2003) results
+
+We are far from the estimates that Ives and colleagues obtained in their paper. This is because we do not fit the same model. In Chapter 14 on the *Estimation of species interaction strengths with and without covariates* of the MARSS package user's guide, additionnal steps are given to fit models more similar to Ives' model.  
+
+### Tackle a more complex problem
+
+At some stage, I would like to analyse the data from this paper [A multi-decade time ser ies of kelp forest community structure at San Nicolas Island, California (USA)](https://esajournals.onlinelibrary.wiley.com/doi/epdf/10.1890/13-0561R.1).
+
+These data are analysed in Eli Holmes' course on [estimating interactions](https://nwfsc-timeseries.github.io/atsa/Lectures/Week%209/lec_17_estimating_interactions.pdf) starting at slide 31. Below are some preliminary descriptive analyses.
+
+When you go on the [data paper webpage](http://www.esapubs.org/archive/ecol/E094/244/), you have the [raw data](http://www.esapubs.org/archive/ecol/E094/244/#data) and the [metadata](http://www.esapubs.org/archive/ecol/E094/244/metadata.php). 
+
+Broadly speaking, we have:
+
+* 7 sites around the island
+* Biannual surveys from 1980-2011 (n= 63)
+* Divers collect data on:
+* Fish (59 spp)
+* Inverts (14 spp)
+* Kelps (6 spp)
+
+Get sea otter (Enhydra lutris) counts.
+```{r}
+ind_otters <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Table2_independent_sea_otters.csv") %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date)) %>%
+  select(-date) %>%
+  pivot_longer(cols = west:south, values_to = "counts", names_to = "region") %>%
+  add_column(stage = "independent")
+  
+pup_otters <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Table3_sea_otter_pups.csv") %>% 
+  clean_names() %>%
+  mutate(date = mdy(year),
+         year = year(date)) %>%
+  select(-date) %>%
+  pivot_longer(cols = west:south, values_to = "counts", names_to = "region") %>%
+  add_column(stage = "pup")
+
+otters <- bind_rows(ind_otters, pup_otters)
+```
+
+Visualize.
+```{r}
+otters %>%
+  count(year, region, wt = counts) %>%
+  ggplot() + 
+  aes(x = year, y = n, fill = region) +
+  geom_col() +
+  labs(y = "# otters",
+       fill = "Region")
+```
+
+
+Now let's get the counts for all species.
+
+Benthic fishes first. 
+```{r}
+benthicfish_raw <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Benthic%20fish%20density%20raw%20data.csv")
+
+benthicfish <- benthicfish_raw %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date)) %>%
+#  separate(date, c("year", "month", "day"), "-")
+  select(station, year, species_code, adult_density, juv_density)
+
+#dat %>% View()
+
+benthicfish %>% count(station) # 7 stations/sites
+benthicfish %>% count(year) # 30 years
+benthicfish %>% count(species_code) # 37 species
+```
+
+```{r}
+midwaterfish_raw <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Midwater%20fish%20density%20raw%20data.csv")
+
+midwaterfish <- midwaterfish_raw %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date)) %>%
+#  separate(date, c("year", "month", "day"), "-")
+  select(station, year, species_code, adult_density, juv_density)
+
+#dat %>% View()
+
+midwaterfish %>% count(station) # 7 stations/sites
+midwaterfish %>% count(year) # 30 years
+midwaterfish %>% count(species_code) # 59 species
+
+```
+
+
+```{r}
+benthicover_raw <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Benthic%20cover%20raw%20data.csv")
+
+benthicover <- benthicover_raw %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date)) %>%
+#  separate(date, c("year", "month", "day"), "-")
+  select(station, year, species_code, cover)
+
+#dat %>% View()
+
+benthicover %>% count(station) # 7 stations/sites
+benthicover %>% count(year) # 31 years
+benthicover %>% count(species_code) # 154 species
+benthicover %>% count(cover) # 21 levels
+```
+
+```{r}
+benthicdensity_raw <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Benthic%20density%20raw%20data.csv")
+
+benthicdensity <- benthicdensity_raw %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date)) %>%
+#  separate(date, c("year", "month", "day"), "-")
+  select(station, year, species_code, density)
+
+#dat %>% View()
+
+benthicdensity %>% count(station) # 7 stations/sites
+benthicdensity %>% count(year) # 31 years
+benthicdensity %>% count(species_code) # 19 species
+```
+
+
+```{r}
+giantkelp_raw <- read_csv("http://www.esapubs.org/archive/ecol/E094/244/Giant%20kelp%20size%20frequency.csv")
+
+giantkelp <- giantkelp_raw %>% 
+  clean_names() %>%
+  mutate(date = mdy(date),
+         year = year(date))
+
+giantkelp
+```
+
+Modeling is yet to come. 
+
+<!-- We would like the counts for species: -->
+
+<!-- * Giant kelp = Macrocystis pyrifera -->
+<!-- * Red sea urchin = Strongylocentrotus franciscanus -->
+<!-- * Sheephead = Semicossyphus pulcher -->
+
+<!-- 557	Macrocystis pyrifera <1m	Benthic density -->
+<!-- 557	Macrocystis pyrifera <1m	Benthic cover -->
+<!-- 589	Macrocystis pyrifera >1m	Benthic density -->
+<!-- 589	Macrocystis pyrifera >1m	Benthic cover -->
+
+<!-- 29	Strongylocentrotus franciscanus	Benthic density -->
+<!-- 29	Strongylocentrotus franciscanus	Benthic cover -->
+
+<!-- 1006	Semicossyphus pulcher (f)	Midwater fish density -->
+<!-- 1008	Semicossyphus pulcher (m)	Midwater fish density -->
+
