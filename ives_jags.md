@@ -228,7 +228,7 @@ kem.plank.0 <- dat %>%
 ## Use MARSSparamCIs to compute CIs and bias estimates.
 ```
 
-We may get the estimates in a more readable format. For example, let's have a look to the interactions. We denote LP for large phytoplankton, SP for small phytoplankton, D for Daphnia and ND for non-Daphnia. These estimates describe the effect of the density of species $j$ on the per capita growth rate of species $i$.
+We may get the estimates in a more readable format. For example, let's have a look to the interactions. We denote LP for large phytoplankton, SP for small phytoplankton, D for Daphnia and ND for non-Daphnia. These estimates describe the effect of the density of species j on the per capita growth rate of species i.
 
 ```r
 B.0 <- coef(kem.plank.0, type = "matrix")$B[1:4, 1:4]
@@ -244,8 +244,8 @@ print(B.0, digits = 2)
 ## ND -0.33 1.35 -0.2180  0.831
 ```
 
-The effect of species $j$ on species $i$ is given by the cell at $i$-th row and $j$-th column. The B matrix suggests that SP has a possitive effect on D (2.29). 
-In the diagonal, we have the strenght of density-dependence: if species $i$ is density-independent, then $B_{i,i}$ equals 1; smaller $B_{i,i}$ means more density dependence.
+The effect of species j on species i is given by the cell at i-th row and j-th column. The B matrix suggests that SP has a possitive effect on D (2.29). 
+In the diagonal, we have the strenght of density-dependence: if species i is density-independent, then ![B_{i,i}](https://render.githubusercontent.com/render/math?math=%5Cdisplaystyle+B_%7Bi%2Ci%7D) equals 1; smaller ![B_{i,i}](https://render.githubusercontent.com/render/math?math=%5Cdisplaystyle+B_%7Bi%2Ci%7D) means more density dependence.
 
 ## MARSS model in the Bayesian framework
 
@@ -605,7 +605,7 @@ print(B.0, digits = 2)
 ## ND -0.33 1.35 -0.2180  0.831
 ```
 
-
+Compare observed counts and estimated abundances.
 ```r
 pivot_dat <- dat %>%
   mutate(week = row_number()) %>%
