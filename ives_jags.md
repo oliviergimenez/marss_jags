@@ -4,7 +4,7 @@
 
 Species interactions are fascinating. To study them we often have to analyse time series of counts. Counts are challenging because of observation errors, lack of independence and spatial heterogeneity. State-space models are often used to deal with these issues. However, state-space models are complex statistical tools and are not easy to manipulate.  
 
-[Eli Holmes](https://eeholmes.github.io/), [Mark Scheuerell](https://faculty.washington.edu/scheuerl/) and [Eric Ward](https://ericward-noaa.github.io/) share electronic books and courses on [the analysis of time series](https://nwfsc-timeseries.github.io/), including material on state-space models. They introduce MARSS models which stands for Multivariate Autoregressive State-Space models as a flexible framework to analyse time series of counts, and provide a package called `MARSS` to implement these models. 
+[Eli Holmes](https://eeholmes.github.io/), [Mark Scheuerell](https://faculty.washington.edu/scheuerl/) and [Eric Ward](https://ericward-noaa.github.io/) share electronic books and courses on [the analysis of time series](https://nwfsc-timeseries.github.io/), including material on state-space models. They introduce MARSS models (MARSS = Multivariate Autoregressive State-Space) as a flexible framework to analyse time series of counts, and provide a package called `MARSS` to implement these models. 
 
 Check it out, these resources are awesome!
 
@@ -24,7 +24,7 @@ Multivariate state-space models can be written as:
 \end{gathered}   
 \end{equation}](https://render.githubusercontent.com/render/math?math=%5Cdisplaystyle+%5Cbegin%7Bequation%7D%0A%5Cbegin%7Bgathered%7D%0A%5Cmathbf%7Bx%7D_t+%3D+%5Cmathbf%7BB%7D+%5Cmathbf%7Bx%7D_%7Bt-1%7D%2B%5Cmathbf%7Bw%7D_t+%5Ctext%7B+where+%7D+%5Cmathbf%7Bw%7D_t+%5Csim+%5C%2C%5Ctext%7BN%7D%280%2C%5Cmathbf%7BQ%7D%29+%5C%5C%0A%5Cmathbf%7By%7D_t+%3D+%5Cmathbf%7BZ%7D%5Cmathbf%7Bx%7D_t%2B%5Cmathbf%7Ba%7D%2B%5Cmathbf%7Bv%7D_t+%5Ctext%7B+where+%7D+%5Cmathbf%7Bv%7D_t+%5Csim+%5C%2C%5Ctext%7BN%7D%280%2C%5Cmathbf%7BR%7D%29+%5C%5C%0A%5Cmathbf%7Bx%7D_0+%3D+%5Cboldsymbol%7B%5Cmu%7D%0A%5Cend%7Bgathered%7D+++%0A%5Cend%7Bequation%7D%0A)
 
-Briefly speaking, $\mathbf{y}_t$ is a vector of observed log counts for each species, $\mathbf{x}_t$ is for the true log abundances, $\mathbf{B}$ is a matrix that captures species interactions, $\mathbf{w}_t$ the process error, $\mathbf{v}_t$ the observation error, $\mathbf{a}$ is a vector of intrinsic growth rate for each species. There are many variations of this model. For example, we may wish to incorporate environmental covariates. More details can be found in the `MARSS` user's guide that you can easily access by typing in the following command.
+Briefly speaking, ![\mathbf{y}_t](https://render.githubusercontent.com/render/math?math=%5Cdisplaystyle+%5Cmathbf%7By%7D_t) is a vector of observed log counts for each species, $\mathbf{x}_t$ is for the true log abundances, $\mathbf{B}$ is a matrix that captures species interactions, $\mathbf{w}_t$ the process error, $\mathbf{v}_t$ the observation error, $\mathbf{a}$ is a vector of intrinsic growth rate for each species. There are many variations of this model. For example, we may wish to incorporate environmental covariates. More details can be found in the `MARSS` user's guide that you can easily access by typing in the following command.
 
 ```r
 RShowDoc("UserGuide", package="MARSS")
