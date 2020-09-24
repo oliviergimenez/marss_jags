@@ -1,0 +1,173 @@
+---
+title: "MARSS and Hwange data"
+date: "24/09/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      dpi = 300)
+```
+
+
+## Read in and visualize data
+
+Prerequisites.
+```{r}
+library(tidyverse)
+theme_set(theme_light()) 
+library(janitor)
+library(lubridate)
+library(MARSS)
+```
+
+Read in the data.
+```{r}
+wps7293 <- readxl::read_xls("data/Water point surveys 1972 - 1993 - Total Number.xls") %>% clean_names()
+wps2001 <- readxl::read_xls("data/Water point surveys 1994 - 2001 - Detailled.xls") %>% clean_names()
+wps2005 <- readxl::read_xls("data/Water point surveys 2002 - 2005 - Detailed.xls") %>% clean_names()
+```
+
+```{r}
+wps7293 %>%
+  count(water_point, sort = TRUE)
+
+wps7293 %>%
+  count(species, sort = TRUE)
+
+wps7293 %>%
+  count(year, sort = TRUE)
+```
+
+
+
+```{r}
+dat <- wps7293 %>%
+  filter(species %in% c("Elephant", "Giraffe", "Lion", "Impala")) %>%
+  select(year, species, total) %>%
+  mutate(species = as_factor(species))
+dat
+```
+
+Plot all data.
+```{r}
+dat %>%
+  group_by(year, species) %>%
+  summarise(mean_biomass = round(mean(total))) %>%
+  ggplot() + 
+  aes(x = year, y = mean_biomass) + 
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "Year", 
+       y = "Counts",
+       color = "Species") +
+  facet_wrap(~species, scales = "free")
+```
+
+## MARSS model in the frequentist framework
+
+We consider a model with the following assumptions:
+* All prey species share the same process variance.
+* All predator species share the same process variance.
+* Prey and predator species have different measurement variances.
+* Measurement errors are independent.
+* Process errors are independent.
+
+We fit this model with the `MARSS` package. We need to specify the ingredients first. 
+```{r}
+Q <- matrix(list(0), 4, 4)
+diag(Q) <- c("Prey", "Prey", "Prey", "Predator")
+R <- matrix(list(0), 4, 4)
+diag(R) <- c("Prey", "Prey", "Prey", "Predator")
+model.0 <- list(
+  B = "unconstrained", U = "zero", Q = Q,
+  Z = "identity", A = "zero", R = R,
+  x0 = "unequal", tinitx = 1
+)
+model.0
+```
+Then we fit the model.
+```{r}
+mod.0 <- dat %>%
+  group_by(year, species) %>%
+  summarise(mean_biomass = round(mean(total))) %>%
+  ungroup() %>%
+  pivot_wider(names_from = species, values_from = mean_biomass) %>%
+  select(-year) %>%
+  t() %>%
+  MARSS(model = model.0)
+```
+
+We may get the estimates in a more readable format. For example, let's have a look to the interactions. These estimates describe the effect of the density of species $j$ on the per capita growth rate of species $i$.
+```{r}
+B.0 <- coef(mod.0, type = "matrix")$B[1:4, 1:4]
+rownames(B.0) <- colnames(B.0) <- c("Elephant", "Giraffe", "Impala", "Lion")
+print(B.0, digits = 2)
+```
+
+The effect of species $j$ on species $i$ is given by the cell at $i$-th row and $j$-th column. The B matrix suggests that Lion has a negative effect on impala and positive on Elephant and Giraffe. In the diagonal, we have the strength of density-dependence: if species $i$ is density-independent, then $B_{i,i}$ equals 1, like Impala; smaller $B_{i,i}$ means more density dependence, like Giraffe.
+
+Compare observations to fitted values.
+```{r}
+fr <- forecast.marssMLE(mod.0, h=0)
+plot(fr)
+```
+
+
+Forecast 10 years ahead.
+```{r}
+fr <- forecast.marssMLE(mod.0, h = 10)
+plot(fr)
+```
+
+
+Try again, with a simpler model.
+```{r}
+Q <- matrix(list(0), 4, 4)
+diag(Q) <- c("all", "all", "all", "all")
+R <- matrix(list(0), 4, 4)
+diag(R) <- c("all", "all", "all", "all")
+model.0 <- list(
+  B = "unconstrained", U = "zero", Q = Q,
+  Z = "identity", A = "zero", R = R,
+  x0 = "unequal", tinitx = 1
+)
+model.0
+```
+Then we fit the model.
+```{r}
+mod.0 <- dat %>%
+  group_by(year, species) %>%
+  summarise(mean_biomass = round(mean(total))) %>%
+  ungroup() %>%
+  pivot_wider(names_from = species, values_from = mean_biomass) %>%
+  select(-year) %>%
+  t() %>%
+  MARSS(model = model.0)
+```
+
+We may get the estimates in a more readable format. For example, let's have a look to the interactions. These estimates describe the effect of the density of species $j$ on the per capita growth rate of species $i$.
+```{r}
+B.0 <- coef(mod.0, type = "matrix")$B[1:4, 1:4]
+rownames(B.0) <- colnames(B.0) <- c("Elephant", "Giraffe", "Impala", "Lion")
+print(B.0, digits = 2)
+```
+
+The effect of species $j$ on species $i$ is given by the cell at $i$-th row and $j$-th column. The B matrix suggests that Lion has a negative effect on impala and positive on Elephant and Giraffe. In the diagonal, we have the strength of density-dependence: if species $i$ is density-independent, then $B_{i,i}$ equals 1, like Impala; smaller $B_{i,i}$ means more density dependence, like Giraffe.
+
+Compare observations to fitted values.
+```{r}
+fr <- forecast.marssMLE(mod.0, h=0)
+plot(fr)
+```
+
+
+Forecast 10 years ahead.
+```{r}
+fr <- forecast.marssMLE(mod.0, h = 10)
+plot(fr)
+```
